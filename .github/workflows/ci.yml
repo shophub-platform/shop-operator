@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+jobs:
+  commitlint:
+    name: Conventional Commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: wagoid/commitlint-github-action@v6
+
+  build-test:
+    name: Lint / Test / Build (Go)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Detect Go module
+        id: detect
+        run: |
+          if [ -f go.mod ]; then echo "go=true" >> "$GITHUB_OUTPUT"; else echo "go=false" >> "$GITHUB_OUTPUT"; fi
+
+      - uses: actions/setup-go@v5
+        if: steps.detect.outputs.go == 'true'
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Lint (go vet)
+        if: steps.detect.outputs.go == 'true'
+        run: go vet ./...
+
+      - name: Test
+        if: steps.detect.outputs.go == 'true'
+        run: go test ./... -count=1
+
+      - name: Build
+        if: steps.detect.outputs.go == 'true'
+        run: go build ./...
+
+      - name: Skeleton (no code yet)
+        if: steps.detect.outputs.go != 'true'
+        run: echo "go.mod još ne postoji — skeleton pipeline prolazi (F0)."
