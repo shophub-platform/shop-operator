@@ -1,0 +1,23 @@
+# --- Go ---
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+vendor/
+coverage.*
+
+# --- Operator / Kubebuilder ---
+testbin/
+cover.out
+
+# --- Env / secrets ---
+.env
+.env.*
+*.local
+
+# --- Editor / OS ---
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
