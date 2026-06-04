@@ -1,0 +1,4 @@
+resources:
+- shop_v1alpha1_wallet.yaml
+- shop_v1alpha1_discordchannel.yaml
+- shop_v1alpha1_shop.yaml

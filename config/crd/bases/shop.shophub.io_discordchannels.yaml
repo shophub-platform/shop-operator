@@ -1,0 +1,80 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: discordchannels.shop.shophub.io
+spec:
+  group: shop.shophub.io
+  names:
+    kind: DiscordChannel
+    listKind: DiscordChannelList
+    plural: discordchannels
+    singular: discordchannel
+    shortNames:
+      - dchan
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - name: Guild
+          type: string
+          jsonPath: .spec.guildID
+        - name: Channel
+          type: string
+          jsonPath: .spec.channelName
+        - name: Type
+          type: string
+          jsonPath: .spec.notificationType
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: DiscordChannel is the Schema for the discordchannels API.
+          properties:
+            apiVersion: { type: string }
+            kind: { type: string }
+            metadata: { type: object }
+            spec:
+              type: object
+              required: [guildID, channelName]
+              properties:
+                guildID:
+                  type: string
+                  minLength: 1
+                channelName:
+                  type: string
+                  minLength: 1
+                  maxLength: 100
+                notificationType:
+                  type: string
+                  enum: [orders, alerts, all]
+                  default: all
+            status:
+              type: object
+              properties:
+                webhookURL: { type: string }
+                phase:
+                  type: string
+                  enum: [Pending, Creating, Ready, Failed]
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required: [type, status, reason, lastTransitionTime, message]
+                    properties:
+                      type: { type: string }
+                      status: { type: string }
+                      reason: { type: string }
+                      message: { type: string }
+                      observedGeneration: { type: integer, format: int64 }
+                      lastTransitionTime: { type: string, format: date-time }
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [type]

@@ -1,0 +1,12 @@
+apiVersion: shop.shophub.io/v1alpha1
+kind: Shop
+metadata:
+  name: clothing-shop
+  namespace: default
+spec:
+  name: Clothing Shop
+  availability: high
+  databaseType: postgres
+  image: ghcr.io/shophub/shop-app:0.1.0
+  walletRef:
+    name: clothing-shop-wallet

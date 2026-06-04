@@ -1,0 +1,4 @@
+resources:
+- bases/shop.shophub.io_shops.yaml
+- bases/shop.shophub.io_discordchannels.yaml
+- bases/shop.shophub.io_wallets.yaml
