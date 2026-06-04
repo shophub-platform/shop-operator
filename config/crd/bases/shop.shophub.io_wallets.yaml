@@ -1,0 +1,80 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: wallets.shop.shophub.io
+spec:
+  group: shop.shophub.io
+  names:
+    kind: Wallet
+    listKind: WalletList
+    plural: wallets
+    singular: wallet
+    shortNames:
+      - wlt
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - name: Network
+          type: string
+          jsonPath: .spec.network
+        - name: Address
+          type: string
+          jsonPath: .status.address
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: Wallet is the Schema for the wallets API.
+          properties:
+            apiVersion: { type: string }
+            kind: { type: string }
+            metadata: { type: object }
+            spec:
+              type: object
+              properties:
+                network:
+                  type: string
+                  enum: [sepolia, mainnet]
+                  default: sepolia
+                address:
+                  type: string
+                  description: If empty, the controller generates an account.
+                  pattern: "^(0x[a-fA-F0-9]{40})?$"
+            status:
+              type: object
+              properties:
+                address: { type: string }
+                phase:
+                  type: string
+                  enum: [Pending, Generating, Ready, Failed]
+                encryptedPrivateKeyRef:
+                  type: object
+                  required: [key]
+                  properties:
+                    name: { type: string, default: "" }
+                    key: { type: string }
+                    optional: { type: boolean }
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required: [type, status, reason, lastTransitionTime, message]
+                    properties:
+                      type: { type: string }
+                      status: { type: string }
+                      reason: { type: string }
+                      message: { type: string }
+                      observedGeneration: { type: integer, format: int64 }
+                      lastTransitionTime: { type: string, format: date-time }
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [type]

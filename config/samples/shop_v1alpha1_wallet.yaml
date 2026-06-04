@@ -1,0 +1,8 @@
+apiVersion: shop.shophub.io/v1alpha1
+kind: Wallet
+metadata:
+  name: clothing-shop-wallet
+  namespace: default
+spec:
+  network: sepolia
+  # address omitted on purpose -> operator will generate one.

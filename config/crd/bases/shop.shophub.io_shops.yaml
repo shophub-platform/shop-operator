@@ -1,0 +1,108 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: shops.shop.shophub.io
+spec:
+  group: shop.shophub.io
+  names:
+    kind: Shop
+    listKind: ShopList
+    plural: shops
+    singular: shop
+    shortNames:
+      - shp
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - name: Availability
+          type: string
+          jsonPath: .spec.availability
+        - name: Database
+          type: string
+          jsonPath: .spec.databaseType
+        - name: Replicas
+          type: integer
+          jsonPath: .spec.replicas
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: Shop is the Schema for the shops API.
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required:
+                - name
+                - walletRef
+                - image
+              properties:
+                name:
+                  type: string
+                  description: Human readable name of the shop.
+                  minLength: 1
+                  maxLength: 63
+                availability:
+                  type: string
+                  description: standard -> 2 replicas, high -> 3 replicas.
+                  enum: [standard, high]
+                  default: standard
+                walletRef:
+                  type: object
+                  description: References the Wallet CR holding the payout account.
+                  properties:
+                    name:
+                      type: string
+                      default: ""
+                databaseType:
+                  type: string
+                  description: Database backend for the shop.
+                  enum: [postgres, redis]
+                  default: postgres
+                image:
+                  type: string
+                  description: Container image of the shop application.
+                  minLength: 1
+                replicas:
+                  type: integer
+                  format: int32
+                  description: Computed replica count derived from availability.
+                  minimum: 0
+            status:
+              type: object
+              properties:
+                phase:
+                  type: string
+                  enum: [Pending, Provisioning, Ready, Failed]
+                readyReplicas:
+                  type: integer
+                  format: int32
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required: [type, status, reason, lastTransitionTime, message]
+                    properties:
+                      type: { type: string }
+                      status: { type: string }
+                      reason: { type: string }
+                      message: { type: string }
+                      observedGeneration: { type: integer, format: int64 }
+                      lastTransitionTime: { type: string, format: date-time }
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys: [type]

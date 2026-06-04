@@ -1,0 +1,34 @@
+domain: shophub.io
+layout:
+- go.kubebuilder.io/v4
+projectName: shop-operator
+repo: github.com/shophub-platform/shop-operator
+resources:
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: shophub.io
+  group: shop
+  kind: Shop
+  path: github.com/shophub-platform/shop-operator/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: shophub.io
+  group: shop
+  kind: DiscordChannel
+  path: github.com/shophub-platform/shop-operator/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: shophub.io
+  group: shop
+  kind: Wallet
+  path: github.com/shophub-platform/shop-operator/api/v1alpha1
+  version: v1alpha1
+version: "3"
