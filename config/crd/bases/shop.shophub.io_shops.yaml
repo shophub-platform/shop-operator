@@ -29,6 +29,9 @@ spec:
         - name: Phase
           type: string
           jsonPath: .status.phase
+        - name: URL
+          type: string
+          jsonPath: .status.url
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
@@ -92,6 +95,17 @@ spec:
                 readyReplicas:
                   type: integer
                   format: int32
+                replicaCount:
+                  type: integer
+                  format: int32
+                  description: Desired number of replicas derived from availability.
+                url:
+                  type: string
+                  description: Public ingress URL of the shop.
+                observedGeneration:
+                  type: integer
+                  format: int64
+                  description: The .metadata.generation last processed by the controller.
                 conditions:
                   type: array
                   items:

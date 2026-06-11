@@ -64,15 +64,41 @@ const (
 	ShopPhaseFailed       ShopPhase = "Failed"
 )
 
+// Condition types reported on a Shop's status.
+const (
+	// ConditionReady is True when the shop and all of its child resources are
+	// provisioned and healthy.
+	ConditionReady = "Ready"
+	// ConditionDatabaseReady is True when the backing database (CNPG Cluster or
+	// Redis CR) reports a healthy/ready state.
+	ConditionDatabaseReady = "DatabaseReady"
+	// ConditionDiscordReady is True when the referenced DiscordChannel is Ready.
+	ConditionDiscordReady = "DiscordReady"
+	// ConditionWalletReady is True when the referenced Wallet exists and is Ready.
+	ConditionWalletReady = "WalletReady"
+)
+
 // ShopStatus defines the observed state of Shop.
 type ShopStatus struct {
 	// Phase is the current lifecycle phase of the shop.
 	// +optional
 	Phase ShopPhase `json:"phase,omitempty"`
 
-	// ReadyReplicas is the number of ready replicas.
+	// ReadyReplicas is the number of ready replicas of the shop backend.
 	// +optional
 	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
+
+	// ReplicaCount is the desired number of replicas derived from availability.
+	// +optional
+	ReplicaCount int32 `json:"replicaCount,omitempty"`
+
+	// URL is the public ingress URL of the shop.
+	// +optional
+	URL string `json:"url,omitempty"`
+
+	// ObservedGeneration is the .metadata.generation last processed by the controller.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
 	// Conditions represent the latest available observations.
 	// +optional
@@ -88,6 +114,7 @@ type ShopStatus struct {
 // +kubebuilder:printcolumn:name="Database",type=string,JSONPath=`.spec.databaseType`
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.spec.replicas`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="URL",type=string,JSONPath=`.status.url`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Shop is the Schema for the shops API.
