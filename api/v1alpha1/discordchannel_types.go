@@ -47,6 +47,15 @@ type DiscordChannelStatus struct {
 	// +optional
 	WebhookURL string `json:"webhookURL,omitempty"`
 
+	// ChannelID is the Discord channel ID created for this resource. It is
+	// retained so the finalizer can delete the channel on cleanup.
+	// +optional
+	ChannelID string `json:"channelID,omitempty"`
+
+	// WebhookID is the Discord webhook ID created for the channel.
+	// +optional
+	WebhookID string `json:"webhookID,omitempty"`
+
 	// Phase is the current lifecycle phase of the channel.
 	// +optional
 	Phase DiscordChannelPhase `json:"phase,omitempty"`

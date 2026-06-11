@@ -4,6 +4,6 @@ metadata:
   name: clothing-shop-notifications
   namespace: default
 spec:
-  guildID: "123456789012345678"
+  guildID: "1514685061906174114"
   channelName: clothing-shop-orders
   notificationType: all

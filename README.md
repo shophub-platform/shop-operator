@@ -1,6 +1,6 @@
 # shop-operator
 
-Kubernetes operator for the ShopHub platform (Faza F5 — Shop reconciler implementiran; Discord/Wallet reconciler-i u toku).
+Kubernetes operator for the ShopHub platform (Faza F5 — Shop + DiscordChannel reconciler-i implementirani; Wallet reconciler u toku).
 
 Module: `github.com/shophub-platform/shop-operator` · Domain: `shophub.io` · Group/Version: `shop.shophub.io/v1alpha1`
 
@@ -19,7 +19,7 @@ Module: `github.com/shophub-platform/shop-operator` · Domain: `shophub.io` · G
 | Stavka | Opis | Status |
 |--------|------|--------|
 | **10.1** | Shop reconciler logika (13 koraka) | ✅ Implementirano |
-| **10.2** | DiscordChannel reconciler (Discord REST API, webhook, finalizer) | ⏳ Skeleton (samo loguje) |
+| **10.2** | DiscordChannel reconciler (Discord REST API, webhook, finalizer) | ✅ Implementirano |
 | **10.3** | Wallet reconciler (validacija adrese / key-pair generisanje, AES-GCM, finalizer) | ⏳ Skeleton (samo loguje) |
 | **10.4** | Testovi operatora (envtest unit, kind integracioni, chaos) | ⏳ Nije započeto |
 | **10.5** | Definition of Done (E2E < 60s, cleanup, coverage ≥ 70%) | ⏳ Čeka 10.2–10.4 |
@@ -51,6 +51,22 @@ Dvije projektne odluke u 10.1:
   webhook kad bude Ready), a **Wallet** mora samo *postojati*. Strogi gate iz
   specifikacije ("blokiraj dok Discord nije Ready") se uključuje sa
   `REQUIRE_DISCORD=true`. Eksterni operatori za bazu/monitoring se tretiraju striktno.
+
+### 10.2 DiscordChannel reconciler — šta je urađeno
+
+`internal/controller/discordchannel_controller.go` + `internal/discord/client.go`:
+
+- **Discord REST API** klijent (`internal/discord`): `POST /guilds/{id}/channels` (tekstualni
+  kanal), `POST /channels/{id}/webhooks` (webhook), `DELETE /channels/{id}` (cleanup).
+  Bazni URL je `https://discord.com/api/v10`, override preko `DISCORD_API_BASE`.
+- **Bot token** se čita iz Secreta `discord-bot-token` u namespace-u operatora
+  (`OPERATOR_NAMESPACE`/`POD_NAMESPACE` env, pa service-account namespace fajl, pa `default`).
+  Podržani ključevi: `token`, `bot-token`, `DISCORD_BOT_TOKEN`.
+- Kreira kanal → kreira webhook → **webhook URL čuva u Secretu `discord-webhook-<name>`**.
+- **Finalizer** `shop.shophub.io/discordchannel-cleanup`: pri brisanju CR-a briše Discord
+  kanal i webhook Secret.
+- Status: `Phase` (Pending→Creating→Ready/Failed), `ChannelID`, `WebhookID`, `WebhookURL`,
+  `Conditions`. Idempotentno (ne kreira ponovo ako su ID-evi već u statusu).
 
 ## Pokretanje i testiranje
 
@@ -98,6 +114,29 @@ kubectl get shops -w          # prati Phase: Pending -> Provisioning -> Ready
 kubectl describe shop <ime>   # Conditions, URL, ReplicaCount
 kubectl get deploy,svc,ingress,configmap,secret -l app.kubernetes.io/managed-by=shop-operator
 ```
+
+### 3b. Test DiscordChannel reconciler-a (10.2)
+
+Treba ti pravi Discord bot token (Developer Portal → Bot) i Guild ID servera u koji
+bot ima dozvolu da kreira kanale. Operatoru reci u kom je namespace-u token:
+
+```powershell
+$env:OPERATOR_NAMESPACE="default"
+kubectl create secret generic discord-bot-token --from-literal=token=<BOT_TOKEN> -n default
+go run ./cmd/main.go
+```
+
+U drugom prozoru kreiraj DiscordChannel CR (popuni `guildID` u sample-u):
+
+```powershell
+kubectl apply -f config/samples/shop_v1alpha1_discordchannel.yaml
+kubectl get dchan -w                       # Phase Pending -> Creating -> Ready
+kubectl get secret discord-webhook-<ime>   # webhook URL je tu, ključ "url"
+kubectl delete dchan <ime>                  # finalizer briše kanal + webhook secret
+```
+
+> Bez pravog tokena/klastera možeš logiku testirati i envtest-om sa mock Discord serverom
+> (`DISCORD_API_BASE` → tvoj test HTTP server) — to je dio 10.4.
 
 ### 4. Docker image
 
