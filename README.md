@@ -1,6 +1,6 @@
 # shop-operator
 
-Kubernetes operator for the ShopHub platform (Faza F5 — Shop + DiscordChannel reconciler-i implementirani; Wallet reconciler u toku).
+Kubernetes operator for the ShopHub platform (Faza F5 — Shop, DiscordChannel i Wallet reconciler-i implementirani; testovi 10.4 u toku).
 
 Module: `github.com/shophub-platform/shop-operator` · Domain: `shophub.io` · Group/Version: `shop.shophub.io/v1alpha1`
 
@@ -20,7 +20,7 @@ Module: `github.com/shophub-platform/shop-operator` · Domain: `shophub.io` · G
 |--------|------|--------|
 | **10.1** | Shop reconciler logika (13 koraka) | ✅ Implementirano |
 | **10.2** | DiscordChannel reconciler (Discord REST API, webhook, finalizer) | ✅ Implementirano |
-| **10.3** | Wallet reconciler (validacija adrese / key-pair generisanje, AES-GCM, finalizer) | ⏳ Skeleton (samo loguje) |
+| **10.3** | Wallet reconciler (validacija adrese / key-pair generisanje, AES-GCM, finalizer) | ✅ Implementirano |
 | **10.4** | Testovi operatora (envtest unit, kind integracioni, chaos) | ⏳ Nije započeto |
 | **10.5** | Definition of Done (E2E < 60s, cleanup, coverage ≥ 70%) | ⏳ Čeka 10.2–10.4 |
 
@@ -67,6 +67,21 @@ Dvije projektne odluke u 10.1:
   kanal i webhook Secret.
 - Status: `Phase` (Pending→Creating→Ready/Failed), `ChannelID`, `WebhookID`, `WebhookURL`,
   `Conditions`. Idempotentno (ne kreira ponovo ako su ID-evi već u statusu).
+
+### 10.3 Wallet reconciler — šta je urađeno
+
+`internal/controller/wallet_controller.go` + `internal/wallet/wallet.go`:
+
+- **Spec.Address postavljen** → validira format (EIP-55, `go-ethereum/common`), čuva
+  normalizovanu adresu u `Status.Address`, `Phase=Ready`. Bez Secreta (ključ je eksterni).
+- **Spec.Address prazan** → generiše novi secp256k1 **key pair** (`go-ethereum/crypto`),
+  privatni ključ enkriptuje **AES-256-GCM** i sprema u Secret `<name>-wallet-key`
+  (ključ `encrypted-private-key`); `Status.EncryptedPrivateKeyRef` pokazuje na njega.
+- **AES passphrase** se čita iz env `WALLET_ENCRYPTION_KEY` ili iz Secreta
+  `wallet-encryption-key` (ključ `key`/`passphrase`) u namespace-u operatora; iz njega se
+  SHA-256 izvodi 32-bajtni AES ključ.
+- **Finalizer** `shop.shophub.io/wallet-cleanup` briše Secret pri brisanju Wallet CR-a.
+- Idempotentno: kad je `Status.Phase=Ready` ne radi ništa.
 
 ## Pokretanje i testiranje
 
@@ -137,6 +152,29 @@ kubectl delete dchan <ime>                  # finalizer briše kanal + webhook s
 
 > Bez pravog tokena/klastera možeš logiku testirati i envtest-om sa mock Discord serverom
 > (`DISCORD_API_BASE` → tvoj test HTTP server) — to je dio 10.4.
+
+### 3c. Test Wallet reconciler-a (10.3)
+
+Operatoru daj AES passphrase (env je najlakše) i pokreni ga:
+
+```powershell
+$env:OPERATOR_NAMESPACE="default"
+$env:WALLET_ENCRYPTION_KEY="neka-tajna-fraza"
+go run ./cmd/main.go
+```
+
+**Generisanje ključa** (Spec.Address prazan):
+
+```powershell
+kubectl apply -f config/samples/shop_v1alpha1_wallet.yaml
+kubectl get wlt -w                         # Phase -> Ready, Address popunjen
+kubectl get wlt <ime> -o jsonpath="{.status}"   # address + encryptedPrivateKeyRef
+kubectl get secret <ime>-wallet-key                # enkriptovani ključ
+kubectl delete wlt <ime>                    # finalizer briše Secret
+```
+
+**Validacija postojeće adrese**: u sample-u postavi `spec.address: "0x..."` (validna 0x+40 hex) →
+operator je samo provjeri/normalizuje u `Status.Address`, bez Secreta. Nevalidna adresa → `Phase=Failed`.
 
 ### 4. Docker image
 
