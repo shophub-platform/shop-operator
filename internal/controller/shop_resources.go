@@ -2,6 +2,7 @@ package controller
 
 import (
 	"fmt"
+	"os"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -56,6 +57,9 @@ func shopURL(shop *shopv1alpha1.Shop) string {
 // frontendImage returns the frontend image, honouring the annotation override.
 func frontendImage(shop *shopv1alpha1.Shop) string {
 	if v := shop.Annotations[frontendImageAnnotation]; v != "" {
+		return v
+	}
+	if v := os.Getenv("DEFAULT_FRONTEND_IMAGE"); v != "" {
 		return v
 	}
 	return defaultFrontendImage
@@ -196,7 +200,12 @@ func buildService(svc *corev1.Service, shop *shopv1alpha1.Shop, component string
 // buildIngress (step 9): host <name>.shophub.local, "/" → frontend, "/api" → backend.
 func buildIngress(ing *networkingv1.Ingress, shop *shopv1alpha1.Shop) {
 	ing.Labels = labelsFor(shop, "ingress")
-	className := "nginx"
+	// Ingress class is configurable (INGRESS_CLASS env); defaults to nginx.
+	// On k3d/k3s set INGRESS_CLASS=traefik.
+	className := os.Getenv("INGRESS_CLASS")
+	if className == "" {
+		className = "nginx"
+	}
 	ing.Spec.IngressClassName = &className
 	prefix := networkingv1.PathTypePrefix
 	ing.Spec.Rules = []networkingv1.IngressRule{
