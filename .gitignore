@@ -9,7 +9,10 @@ coverage.*
 
 # --- Operator / Kubebuilder ---
 testbin/
+cover
 cover.out
+cover.html
+coverage.out
 
 # --- Env / secrets ---
 .env

@@ -61,6 +61,8 @@ spec:
               type: object
               properties:
                 webhookURL: { type: string }
+                channelID: { type: string }
+                webhookID: { type: string }
                 phase:
                   type: string
                   enum: [Pending, Creating, Ready, Failed]
