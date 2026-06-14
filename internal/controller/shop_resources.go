@@ -114,6 +114,7 @@ func buildBackendDeployment(dep *appsv1.Deployment, shop *shopv1alpha1.Shop, rep
 			Name:  "backend",
 			Image: shop.Spec.Image,
 			Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: backendPort}},
+			Env:   backendDBEnv(shop),
 			EnvFrom: []corev1.EnvFromSource{
 				{ConfigMapRef: &corev1.ConfigMapEnvSource{
 					LocalObjectReference: corev1.LocalObjectReference{Name: configMapName(shop)}}},
@@ -123,6 +124,34 @@ func buildBackendDeployment(dep *appsv1.Deployment, shop *shopv1alpha1.Shop, rep
 			ReadinessProbe: httpProbe("/health", backendPort),
 			LivenessProbe:  httpProbe("/health", backendPort),
 			Resources:      defaultResources(),
+		},
+	}
+}
+
+// backendDBEnv injects the database credentials the shop backend expects
+// (DB_NAME/DB_USER/DB_PASSWORD/DB_SSLMODE) from the CNPG-generated app Secret.
+// DB_HOST/DB_PORT come from the ConfigMap.
+func backendDBEnv(shop *shopv1alpha1.Shop) []corev1.EnvVar {
+	if shop.Spec.DatabaseType == shopv1alpha1.DatabaseRedis {
+		return nil
+	}
+	appSecret := databaseName(shop) + "-app"
+	return []corev1.EnvVar{
+		secretEnv("DB_NAME", appSecret, "dbname"),
+		secretEnv("DB_USER", appSecret, "username"),
+		secretEnv("DB_PASSWORD", appSecret, "password"),
+		{Name: "DB_SSLMODE", Value: "require"},
+	}
+}
+
+func secretEnv(name, secretName, key string) corev1.EnvVar {
+	return corev1.EnvVar{
+		Name: name,
+		ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
+				Key:                  key,
+			},
 		},
 	}
 }
