@@ -21,7 +21,7 @@ Module: `github.com/shophub-platform/shop-operator` · Domain: `shophub.io` · G
 | **10.1** | Shop reconciler logika (13 koraka) | ✅ Implementirano |
 | **10.2** | DiscordChannel reconciler (Discord REST API, webhook, finalizer) | ✅ Implementirano |
 | **10.3** | Wallet reconciler (validacija adrese / key-pair generisanje, AES-GCM, finalizer) | ✅ Implementirano |
-| **10.4** | Testovi operatora (envtest unit, kind integracioni, chaos) | ⏳ Nije započeto |
+| **10.4** | Testovi operatora (unit + chaos + coverage) | ✅ Unit (fake-client) za sva 3 reconcilera + unit chaos; coverage ≥70%. Kind integracioni dokumentovan |
 | **10.5** | Definition of Done (E2E < 60s, cleanup, coverage ≥ 70%) | ⏳ Čeka 10.2–10.4 |
 
 ### 10.1 Shop reconciler — šta je urađeno
@@ -175,6 +175,27 @@ kubectl delete wlt <ime>                    # finalizer briše Secret
 
 **Validacija postojeće adrese**: u sample-u postavi `spec.address: "0x..."` (validna 0x+40 hex) →
 operator je samo provjeri/normalizuje u `Status.Address`, bez Secreta. Nevalidna adresa → `Phase=Failed`.
+
+### 3d. Testovi i coverage (10.4)
+
+Svi unit testovi reconcilera koriste **fake-client** (rade na Windows-u, bez klastera/envtest-a):
+
+```powershell
+go test ./... -cover
+```
+
+Coverage nad `internal` paketima (DoD ≥70%):
+
+```powershell
+go test -coverpkg=./internal/... -coverprofile=cover.out ./...
+go tool cover -func=cover.out | Select-String "total:"
+go tool cover -html=cover.out          # HTML izvještaj u browseru
+```
+
+Pokriveno: `internal/wallet` ~82%, `internal/discord` ~82%, `internal/controller` ~70% (sva tri
+reconcilera + builderi + unit „chaos" test koji briše Deployment i provjerava da ga operator
+ponovo napravi). Kind integracioni test (apply Shop → Ready → validacija svih resursa) i živi
+chaos test zahtijevaju pun stack operatora (CNPG/Redis/Prometheus) i rade se ručno na kind klasteru.
 
 ### 4. Docker image
 
