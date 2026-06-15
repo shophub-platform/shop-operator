@@ -21,9 +21,6 @@ const (
 	postgresPort = 5432
 	redisPort    = 6379
 
-	// ingressDomain is the base domain for shop ingress hosts: <name>.shophub.local.
-	ingressDomain = "shophub.local"
-
 	// frontendImageAnnotation lets a Shop override the frontend image; if unset
 	// defaultFrontendImage is used. Spec.Image is treated as the backend image.
 	frontendImageAnnotation = "shop.shophub.io/frontend-image"
@@ -44,9 +41,18 @@ func ingressName(shop *shopv1alpha1.Shop) string   { return shop.Name }
 func dashboardName(shop *shopv1alpha1.Shop) string { return shop.Name + "-dashboard" }
 func discordChannelName(shop *shopv1alpha1.Shop) string { return shop.Name }
 
+// ingressBaseDomain returns the base domain for ingress hosts.
+// INGRESS_DOMAIN env overrides the default (e.g. "127.0.0.1.nip.io" for local dev).
+func ingressBaseDomain() string {
+	if v := os.Getenv("INGRESS_DOMAIN"); v != "" {
+		return v
+	}
+	return "shophub.local"
+}
+
 // shopHost returns the public ingress host for the shop.
 func shopHost(shop *shopv1alpha1.Shop) string {
-	return fmt.Sprintf("%s.%s", shop.Name, ingressDomain)
+	return fmt.Sprintf("%s.%s", shop.Name, ingressBaseDomain())
 }
 
 // shopURL returns the public URL of the shop.

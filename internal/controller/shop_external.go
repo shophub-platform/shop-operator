@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -178,12 +179,12 @@ func (r *ShopReconciler) reconcileRedis(
 		ConnString: fmt.Sprintf("redis://%s:%d/0", name, redisPort),
 	}
 
-	redis, err := r.getUnstructured(ctx, redisGVK, name, shop.Namespace)
-	if err != nil {
-		return info, fmt.Errorf("get Redis: %w", err)
+	// OpsTree Redis operator (v1beta2 standalone) does not populate status.state;
+	// check the StatefulSet it creates instead.
+	var sts appsv1.StatefulSet
+	if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: shop.Namespace}, &sts); err == nil {
+		info.Ready = sts.Status.ReadyReplicas >= 1
 	}
-	state, _, _ := unstructured.NestedString(redis.Object, "status", "state")
-	info.Ready = state == "Ready"
 	return info, nil
 }
 

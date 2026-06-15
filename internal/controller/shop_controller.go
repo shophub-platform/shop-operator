@@ -133,6 +133,9 @@ func (r *ShopReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		"DB_PORT":        fmt.Sprintf("%d", db.Port),
 		"WALLET_ADDRESS": walletAddr,
 	}
+	if shop.Spec.DatabaseType == shopv1alpha1.DatabaseRedis {
+		cmData["REDIS_ADDR"] = fmt.Sprintf("%s:%d", db.Host, db.Port)
+	}
 	cm := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: configMapName(&shop), Namespace: shop.Namespace}}
 	if err := r.applyOwned(ctx, &shop, cm, func() { buildConfigMap(cm, &shop, cmData) }); err != nil {
 		return r.fail(ctx, &shop, "ConfigMapFailed", err)
