@@ -66,11 +66,16 @@ func TestBuildBackendDeployment(t *testing.T) {
 		t.Fatalf("replicas = %v, want 3", dep.Spec.Replicas)
 	}
 	c := dep.Spec.Template.Spec.Containers
-	if len(c) != 1 || c[0].Image != "be:img" {
-		t.Fatalf("container = %+v, want image be:img", c)
+	if len(c) != 2 {
+		t.Fatalf("expected 2 containers (backend + listener), got %d", len(c))
+	}
+
+	// --- backend container ---
+	if c[0].Name != "backend" || c[0].Image != "be:img" {
+		t.Fatalf("backend container = %+v, want name=backend image=be:img", c[0])
 	}
 	if c[0].Ports[0].ContainerPort != backendPort {
-		t.Errorf("port = %d, want %d", c[0].Ports[0].ContainerPort, backendPort)
+		t.Errorf("backend port = %d, want %d", c[0].Ports[0].ContainerPort, backendPort)
 	}
 	// envFrom must reference both the ConfigMap and the Secret.
 	var hasCM, hasSecret bool
@@ -83,7 +88,15 @@ func TestBuildBackendDeployment(t *testing.T) {
 		}
 	}
 	if !hasCM || !hasSecret {
-		t.Errorf("envFrom missing refs: cm=%v secret=%v", hasCM, hasSecret)
+		t.Errorf("backend envFrom missing refs: cm=%v secret=%v", hasCM, hasSecret)
+	}
+
+	// --- listener sidecar ---
+	if c[1].Name != "listener" || c[1].Image != "be:img" {
+		t.Errorf("listener container = %+v, want name=listener image=be:img", c[1])
+	}
+	if len(c[1].Command) == 0 || c[1].Command[0] != "./listener" {
+		t.Errorf("listener command = %v, want [./listener]", c[1].Command)
 	}
 }
 
