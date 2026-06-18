@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -125,13 +126,16 @@ func (r *ShopReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	// 5. ConfigMap with the shop application configuration.
 	cmData := map[string]string{
-		"SHOP_NAME":      shop.Name,
-		"APP_ENV":        "production",
-		"SERVER_PORT":    fmt.Sprintf("%d", backendPort),
-		"DB_TYPE":        db.Type,
-		"DB_HOST":        db.Host,
-		"DB_PORT":        fmt.Sprintf("%d", db.Port),
-		"WALLET_ADDRESS": walletAddr,
+		"SHOP_NAME":            shop.Name,
+		"APP_ENV":              "production",
+		"SERVER_PORT":          fmt.Sprintf("%d", backendPort),
+		"DB_TYPE":              db.Type,
+		"DB_HOST":              db.Host,
+		"DB_PORT":              fmt.Sprintf("%d", db.Port),
+		"SHOP_WALLET_ADDRESS":  walletAddr,
+		"MOCKUSDT_ADDRESS":     os.Getenv("MOCKUSDT_ADDRESS"),
+		"SEPOLIA_RPC_URL":      os.Getenv("SEPOLIA_RPC_URL"),
+		"LISTENER_BACKEND_URL": fmt.Sprintf("http://localhost:%d", backendPort),
 	}
 	if shop.Spec.DatabaseType == shopv1alpha1.DatabaseRedis {
 		cmData["REDIS_ADDR"] = fmt.Sprintf("%s:%d", db.Host, db.Port)
@@ -142,9 +146,14 @@ func (r *ShopReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	// 6. Secret with the DB connection string and webhook URL.
+	listenerKey := os.Getenv("LISTENER_INTERNAL_KEY")
+	if listenerKey == "" {
+		listenerKey = "change-me-in-production"
+	}
 	secData := map[string]string{
-		"DATABASE_URL":        db.ConnString,
-		"DISCORD_WEBHOOK_URL": webhookURL,
+		"DATABASE_URL":         db.ConnString,
+		"DISCORD_WEBHOOK_URL":  webhookURL,
+		"LISTENER_INTERNAL_KEY": listenerKey,
 	}
 	sec := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: secretName(&shop), Namespace: shop.Namespace}}
 	if err := r.applyOwned(ctx, &shop, sec, func() { buildSecret(sec, &shop, secData) }); err != nil {

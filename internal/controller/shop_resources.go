@@ -112,28 +112,50 @@ func buildSecret(sec *corev1.Secret, shop *shopv1alpha1.Shop, stringData map[str
 	sec.StringData = stringData
 }
 
-// buildBackendDeployment (step 7): replicas + envFrom ConfigMap & Secret.
+// buildBackendDeployment (step 7): backend + blockchain listener sidecar.
 func buildBackendDeployment(dep *appsv1.Deployment, shop *shopv1alpha1.Shop, replicas int32) {
 	dep.Labels = labelsFor(shop, "backend")
 	r := replicas
 	dep.Spec.Replicas = &r
 	dep.Spec.Selector = &metav1.LabelSelector{MatchLabels: selectorFor(shop, "backend")}
 	dep.Spec.Template.ObjectMeta.Labels = labelsFor(shop, "backend")
+
+	envFrom := []corev1.EnvFromSource{
+		{ConfigMapRef: &corev1.ConfigMapEnvSource{
+			LocalObjectReference: corev1.LocalObjectReference{Name: configMapName(shop)}}},
+		{SecretRef: &corev1.SecretEnvSource{
+			LocalObjectReference: corev1.LocalObjectReference{Name: secretName(shop)}}},
+	}
+
 	dep.Spec.Template.Spec.Containers = []corev1.Container{
 		{
-			Name:  "backend",
-			Image: shop.Spec.Image,
-			Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: backendPort}},
-			Env:   backendDBEnv(shop),
-			EnvFrom: []corev1.EnvFromSource{
-				{ConfigMapRef: &corev1.ConfigMapEnvSource{
-					LocalObjectReference: corev1.LocalObjectReference{Name: configMapName(shop)}}},
-				{SecretRef: &corev1.SecretEnvSource{
-					LocalObjectReference: corev1.LocalObjectReference{Name: secretName(shop)}}},
-			},
+			Name:           "backend",
+			Image:          shop.Spec.Image,
+			Ports:          []corev1.ContainerPort{{Name: "http", ContainerPort: backendPort}},
+			Env:            backendDBEnv(shop),
+			EnvFrom:        envFrom,
 			ReadinessProbe: httpProbe("/health", backendPort),
 			LivenessProbe:  httpProbe("/health", backendPort),
 			Resources:      defaultResources(),
+		},
+		{
+			// Blockchain listener — same image, overridden command, shared pod network
+			// so LISTENER_BACKEND_URL=http://localhost:8081 reaches the backend container.
+			Name:    "listener",
+			Image:   shop.Spec.Image,
+			Command: []string{"./listener"},
+			Env:     backendDBEnv(shop),
+			EnvFrom: envFrom,
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("10m"),
+					corev1.ResourceMemory: resource.MustParse("32Mi"),
+				},
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("100m"),
+					corev1.ResourceMemory: resource.MustParse("64Mi"),
+				},
+			},
 		},
 	}
 }
