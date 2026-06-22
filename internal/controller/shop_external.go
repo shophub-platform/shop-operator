@@ -33,6 +33,12 @@ var (
 	podMonitorGVK = schema.GroupVersionKind{
 		Group: "monitoring.coreos.com", Version: "v1", Kind: "PodMonitor",
 	}
+	prometheusRuleGVK = schema.GroupVersionKind{
+		Group: "monitoring.coreos.com", Version: "v1", Kind: "PrometheusRule",
+	}
+	alertmanagerConfigGVK = schema.GroupVersionKind{
+		Group: "monitoring.coreos.com", Version: "v1alpha1", Kind: "AlertmanagerConfig",
+	}
 )
 
 // Annotation / env overrides for the Discord guild the channel is created in.
@@ -193,6 +199,15 @@ func (r *ShopReconciler) reconcileRedis(
 // ---------------------------------------------------------------------------
 
 func (r *ShopReconciler) reconcileMonitors(ctx context.Context, shop *shopv1alpha1.Shop) error {
+	// relabeling adds a static shop=<name> label to every scraped metric so
+	// PromQL queries like {shop="myshop"} work across the shared Prometheus.
+	shopRelabeling := []interface{}{
+		map[string]interface{}{
+			"targetLabel": "shop",
+			"replacement": shop.Name,
+		},
+	}
+
 	smSpec := map[string]interface{}{
 		"selector": map[string]interface{}{
 			"matchLabels": map[string]interface{}{
@@ -201,24 +216,37 @@ func (r *ShopReconciler) reconcileMonitors(ctx context.Context, shop *shopv1alph
 			},
 		},
 		"endpoints": []interface{}{
-			map[string]interface{}{"port": "http", "path": "/metrics", "interval": "30s"},
+			map[string]interface{}{
+				"port":        "http",
+				"path":        "/metrics",
+				"interval":    "30s",
+				"relabelings": shopRelabeling,
+			},
 		},
 	}
-	if err := r.upsertUnstructured(ctx, shop, serviceMonitorGVK, shop.Name, smSpec, nil); err != nil {
+	if err := r.upsertUnstructured(ctx, shop, serviceMonitorGVK, shop.Name, smSpec,
+		map[string]string{"release": "monitoring"}); err != nil {
 		return fmt.Errorf("apply ServiceMonitor: %w", err)
 	}
 
 	pmSpec := map[string]interface{}{
 		"selector": map[string]interface{}{
 			"matchLabels": map[string]interface{}{
-				"app.kubernetes.io/instance": shop.Name,
+				"app.kubernetes.io/instance":  shop.Name,
+				"app.kubernetes.io/component": "backend",
 			},
 		},
 		"podMetricsEndpoints": []interface{}{
-			map[string]interface{}{"port": "http", "path": "/metrics", "interval": "30s"},
+			map[string]interface{}{
+				"port":        "http",
+				"path":        "/metrics",
+				"interval":    "30s",
+				"relabelings": shopRelabeling,
+			},
 		},
 	}
-	if err := r.upsertUnstructured(ctx, shop, podMonitorGVK, shop.Name, pmSpec, nil); err != nil {
+	if err := r.upsertUnstructured(ctx, shop, podMonitorGVK, shop.Name, pmSpec,
+		map[string]string{"release": "monitoring"}); err != nil {
 		return fmt.Errorf("apply PodMonitor: %w", err)
 	}
 	return nil
@@ -297,6 +325,115 @@ func (r *ShopReconciler) reconcileDiscordChannel(
 // requireDiscord reports whether the Discord readiness gate is enforced.
 func requireDiscord() bool {
 	return os.Getenv("REQUIRE_DISCORD") == "true"
+}
+
+// ---------------------------------------------------------------------------
+// Step 10.5 — PrometheusRule + AlertmanagerConfig (per-shop alarms).
+// ---------------------------------------------------------------------------
+
+func (r *ShopReconciler) reconcileAlerts(ctx context.Context, shop *shopv1alpha1.Shop) error {
+	// PrometheusRule — four per-shop alert rules.
+	// Label release:kube-prometheus-stack makes Prometheus Operator pick it up.
+	prSpec := map[string]interface{}{
+		"groups": []interface{}{
+			map[string]interface{}{
+				"name": "shop." + shop.Name,
+				"rules": []interface{}{
+					shopAlertRule(
+						"ShopPodRestarting",
+						fmt.Sprintf(`increase(kube_pod_container_status_restarts_total{namespace="%s",pod=~"%s-.*"}[15m]) > 5`,
+							shop.Namespace, shop.Name),
+						"0m", "warning",
+						fmt.Sprintf("Pod restart loop in shop %s", shop.Name),
+						fmt.Sprintf("A pod in shop %s has restarted more than 5 times in the last 15 minutes.", shop.Name),
+						shop.Name,
+					),
+					shopAlertRule(
+						"ShopHigh5xxRate",
+						fmt.Sprintf(`sum(rate(http_requests_total{shop="%s",status_code=~"5.."}[5m])) / sum(rate(http_requests_total{shop="%s"}[5m])) > 0.05`,
+							shop.Name, shop.Name),
+						"5m", "critical",
+						fmt.Sprintf("HTTP 5xx error rate > 5%% in shop %s", shop.Name),
+						fmt.Sprintf("HTTP 5xx error rate for shop %s has exceeded 5%% for the last 5 minutes.", shop.Name),
+						shop.Name,
+					),
+					shopAlertRule(
+						"ShopHighCPU",
+						fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{namespace="%s",pod=~"%s-.*",container!=""}[5m])) / sum(kube_pod_container_resource_limits{namespace="%s",pod=~"%s-.*",resource="cpu"}) > 0.9`,
+							shop.Namespace, shop.Name, shop.Namespace, shop.Name),
+						"10m", "warning",
+						fmt.Sprintf("CPU usage > 90%% in shop %s", shop.Name),
+						fmt.Sprintf("CPU usage for shop %s has exceeded 90%% of its limit for 10 minutes.", shop.Name),
+						shop.Name,
+					),
+					shopAlertRule(
+						"ShopDiskAlmostFull",
+						fmt.Sprintf(`kubelet_volume_stats_used_bytes{namespace="%s",persistentvolumeclaim=~"%s-.*"} / kubelet_volume_stats_capacity_bytes{namespace="%s",persistentvolumeclaim=~"%s-.*"} > 0.85`,
+							shop.Namespace, shop.Name, shop.Namespace, shop.Name),
+						"5m", "critical",
+						fmt.Sprintf("PVC disk usage > 85%% in shop %s", shop.Name),
+						fmt.Sprintf("A PVC for shop %s is more than 85%% full.", shop.Name),
+						shop.Name,
+					),
+				},
+			},
+		},
+	}
+	if err := r.upsertUnstructured(ctx, shop, prometheusRuleGVK, shop.Name+"-alerts", prSpec,
+		map[string]string{"release": "monitoring"}); err != nil {
+		return fmt.Errorf("apply PrometheusRule: %w", err)
+	}
+
+	// AlertmanagerConfig — routes alerts labelled shop=<name> to the shop's
+	// Discord webhook. The URL comes from the Secret created in step 6.
+	amcSpec := map[string]interface{}{
+		"route": map[string]interface{}{
+			"receiver": "discord",
+			"matchers": []interface{}{
+				map[string]interface{}{
+					"name":      "shop",
+					"value":     shop.Name,
+					"matchType": "=",
+				},
+			},
+		},
+		"receivers": []interface{}{
+			map[string]interface{}{
+				"name": "discord",
+				"discordConfigs": []interface{}{
+					map[string]interface{}{
+						"apiURL": map[string]interface{}{
+							"name": secretName(shop),
+							"key":  "DISCORD_WEBHOOK_URL",
+						},
+						"title":   "ShopHub Alert: {{ .GroupLabels.alertname }}",
+						"message": "{{ range .Alerts }}{{ .Annotations.description }}\n{{ end }}",
+					},
+				},
+			},
+		},
+	}
+	if err := r.upsertUnstructured(ctx, shop, alertmanagerConfigGVK, shop.Name+"-alerts", amcSpec, nil); err != nil {
+		return fmt.Errorf("apply AlertmanagerConfig: %w", err)
+	}
+	return nil
+}
+
+// shopAlertRule builds a single Prometheus alert rule map.
+func shopAlertRule(name, expr, forDur, severity, summary, description, shop string) map[string]interface{} {
+	return map[string]interface{}{
+		"alert": name,
+		"expr":  expr,
+		"for":   forDur,
+		"labels": map[string]interface{}{
+			"severity": severity,
+			"shop":     shop,
+		},
+		"annotations": map[string]interface{}{
+			"summary":     summary,
+			"description": description,
+		},
+	}
 }
 
 // discordGuildID resolves the Discord guild ID from the Shop annotation or the
