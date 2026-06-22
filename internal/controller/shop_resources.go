@@ -50,6 +50,16 @@ func ingressBaseDomain() string {
 	return "shophub.local"
 }
 
+// containerImagePullPolicy returns the pull policy for shop container images.
+// Set IMAGE_PULL_POLICY=Never when running against Docker Desktop / kind where
+// images are loaded locally via ctr/kind load and cannot be pulled from a registry.
+func containerImagePullPolicy() corev1.PullPolicy {
+	if v := os.Getenv("IMAGE_PULL_POLICY"); v != "" {
+		return corev1.PullPolicy(v)
+	}
+	return corev1.PullIfNotPresent
+}
+
 // shopHost returns the public ingress host for the shop.
 func shopHost(shop *shopv1alpha1.Shop) string {
 	return fmt.Sprintf("%s.%s", shop.Name, ingressBaseDomain())
@@ -127,25 +137,28 @@ func buildBackendDeployment(dep *appsv1.Deployment, shop *shopv1alpha1.Shop, rep
 			LocalObjectReference: corev1.LocalObjectReference{Name: secretName(shop)}}},
 	}
 
+	pullPolicy := containerImagePullPolicy()
 	dep.Spec.Template.Spec.Containers = []corev1.Container{
 		{
-			Name:           "backend",
-			Image:          shop.Spec.Image,
-			Ports:          []corev1.ContainerPort{{Name: "http", ContainerPort: backendPort}},
-			Env:            backendDBEnv(shop),
-			EnvFrom:        envFrom,
-			ReadinessProbe: httpProbe("/health", backendPort),
-			LivenessProbe:  httpProbe("/health", backendPort),
-			Resources:      defaultResources(),
+			Name:            "backend",
+			Image:           shop.Spec.Image,
+			ImagePullPolicy: pullPolicy,
+			Ports:           []corev1.ContainerPort{{Name: "http", ContainerPort: backendPort}},
+			Env:             backendDBEnv(shop),
+			EnvFrom:         envFrom,
+			ReadinessProbe:  httpProbe("/health", backendPort),
+			LivenessProbe:   httpProbe("/health", backendPort),
+			Resources:       defaultResources(),
 		},
 		{
 			// Blockchain listener — same image, overridden command, shared pod network
 			// so LISTENER_BACKEND_URL=http://localhost:8081 reaches the backend container.
-			Name:    "listener",
-			Image:   shop.Spec.Image,
-			Command: []string{"./listener"},
-			Env:     backendDBEnv(shop),
-			EnvFrom: envFrom,
+			Name:            "listener",
+			Image:           shop.Spec.Image,
+			ImagePullPolicy: pullPolicy,
+			Command:         []string{"./listener"},
+			Env:             backendDBEnv(shop),
+			EnvFrom:         envFrom,
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{
 					corev1.ResourceCPU:    resource.MustParse("10m"),
@@ -197,9 +210,10 @@ func buildFrontendDeployment(dep *appsv1.Deployment, shop *shopv1alpha1.Shop, re
 	dep.Spec.Template.ObjectMeta.Labels = labelsFor(shop, "frontend")
 	dep.Spec.Template.Spec.Containers = []corev1.Container{
 		{
-			Name:  "frontend",
-			Image: frontendImage(shop),
-			Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: frontendPort}},
+			Name:            "frontend",
+			Image:           frontendImage(shop),
+			ImagePullPolicy: containerImagePullPolicy(),
+			Ports:           []corev1.ContainerPort{{Name: "http", ContainerPort: frontendPort}},
 			EnvFrom: []corev1.EnvFromSource{
 				{ConfigMapRef: &corev1.ConfigMapEnvSource{
 					LocalObjectReference: corev1.LocalObjectReference{Name: configMapName(shop)}}},
@@ -312,35 +326,155 @@ func defaultResources() corev1.ResourceRequirements {
 	}
 }
 
-// grafanaDashboardJSON returns a minimal but valid Grafana dashboard scoped to
-// this shop's metrics. Kept intentionally small; richer panels are added in F4.
+// grafanaDashboardJSON returns a full Grafana dashboard for one shop instance.
+// %[1]s = shop.Name, %[2]s = shop.Namespace.
+// The "shop" label on every metric is injected by the ServiceMonitor relabeling.
 func grafanaDashboardJSON(shop *shopv1alpha1.Shop) string {
+	uid := fmt.Sprintf("shop-%s", shop.Name)
+	if len(uid) > 40 {
+		uid = uid[:40]
+	}
 	return fmt.Sprintf(`{
   "annotations": {"list": []},
   "editable": true,
-  "panels": [
-    {
-      "type": "timeseries",
-      "title": "HTTP requests (rate)",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
-      "targets": [
-        {"expr": "sum(rate(http_requests_total{shop=\"%[1]s\"}[5m]))", "legendFormat": "rps"}
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "CPU usage",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
-      "targets": [
-        {"expr": "sum(rate(container_cpu_usage_seconds_total{pod=~\"%[1]s-.*\"}[5m]))", "legendFormat": "cores"}
-      ]
-    }
-  ],
+  "graphTooltip": 1,
   "schemaVersion": 39,
   "tags": ["shophub", "%[1]s"],
   "templating": {"list": []},
   "time": {"from": "now-6h", "to": "now"},
+  "timezone": "browser",
   "title": "Shop — %[1]s",
-  "uid": "shop-%[1]s"
-}`, shop.Name)
+  "uid": "%[3]s",
+  "panels": [
+    {
+      "type": "timeseries", "id": 1,
+      "title": "CPU usage",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "targets": [
+        {"expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"%[2]s\",pod=~\"%[1]s-.*\",container!=\"\"}[5m])) by (pod)", "legendFormat": "{{pod}}"}
+      ]
+    },
+    {
+      "type": "timeseries", "id": 2,
+      "title": "RAM usage",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "fieldConfig": {"defaults": {"unit": "bytes"}},
+      "targets": [
+        {"expr": "sum(container_memory_working_set_bytes{namespace=\"%[2]s\",pod=~\"%[1]s-.*\",container!=\"\"}) by (pod)", "legendFormat": "{{pod}}"}
+      ]
+    },
+    {
+      "type": "timeseries", "id": 3,
+      "title": "Disk usage (PVC)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "fieldConfig": {"defaults": {"unit": "bytes"}},
+      "targets": [
+        {"expr": "kubelet_volume_stats_used_bytes{namespace=\"%[2]s\",persistentvolumeclaim=~\"%[1]s-.*\"}", "legendFormat": "{{persistentvolumeclaim}}"}
+      ]
+    },
+    {
+      "type": "timeseries", "id": 4,
+      "title": "Network throughput",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "fieldConfig": {"defaults": {"unit": "Bps"}},
+      "targets": [
+        {"expr": "sum(rate(container_network_receive_bytes_total{namespace=\"%[2]s\",pod=~\"%[1]s-.*\"}[5m]))", "legendFormat": "RX"},
+        {"expr": "sum(rate(container_network_transmit_bytes_total{namespace=\"%[2]s\",pod=~\"%[1]s-.*\"}[5m]))", "legendFormat": "TX"}
+      ]
+    },
+    {
+      "type": "timeseries", "id": 5,
+      "title": "HTTP request rate",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "fieldConfig": {"defaults": {"unit": "reqps"}},
+      "targets": [
+        {"expr": "sum(rate(http_requests_total{shop=\"%[1]s\"}[5m])) by (status_code)", "legendFormat": "{{status_code}}"}
+      ]
+    },
+    {
+      "type": "timeseries", "id": 6,
+      "title": "HTTP latency (p99 / p50)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "targets": [
+        {"expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{shop=\"%[1]s\"}[5m])) by (le))", "legendFormat": "p99"},
+        {"expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{shop=\"%[1]s\"}[5m])) by (le))", "legendFormat": "p50"}
+      ]
+    },
+    {
+      "type": "stat", "id": 7,
+      "title": "Successful requests 2xx/3xx (24h)",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 24},
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "green"}}},
+      "targets": [
+        {"expr": "sum(increase(http_requests_total{shop=\"%[1]s\",status_code=~\"2..|3..\"}[24h]))", "legendFormat": ""}
+      ]
+    },
+    {
+      "type": "stat", "id": 8,
+      "title": "Failed requests 4xx/5xx (24h)",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 24},
+      "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "fixed", "fixedColor": "red"}}},
+      "targets": [
+        {"expr": "sum(increase(http_requests_total{shop=\"%[1]s\",status_code=~\"4..|5..\"}[24h]))", "legendFormat": ""}
+      ]
+    },
+    {
+      "type": "table", "id": 9,
+      "title": "404s by endpoint (24h)",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 24},
+      "targets": [
+        {"expr": "sum by (path) (increase(http_requests_total{shop=\"%[1]s\",status_code=\"404\"}[24h]))", "legendFormat": "", "instant": true}
+      ]
+    },
+    {
+      "type": "stat", "id": 10,
+      "title": "Unique visitors",
+      "gridPos": {"h": 8, "w": 6, "x": 0, "y": 32},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "targets": [
+        {"expr": "http_unique_visitors_total{shop=\"%[1]s\"}", "legendFormat": ""}
+      ]
+    },
+    {
+      "type": "stat", "id": 11,
+      "title": "Total traffic (GB)",
+      "gridPos": {"h": 8, "w": 6, "x": 6, "y": 32},
+      "fieldConfig": {"defaults": {"unit": "short", "decimals": 2}},
+      "targets": [
+        {"expr": "sum(http_response_bytes_total{shop=\"%[1]s\"}) / 1e9", "legendFormat": ""}
+      ]
+    },
+    {
+      "type": "timeseries", "id": 12,
+      "title": "Orders rate",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "targets": [
+        {"expr": "rate(orders_created_total{shop=\"%[1]s\"}[5m])", "legendFormat": "orders/s"}
+      ]
+    },
+    {
+      "type": "bargauge", "id": 13,
+      "title": "Items stock level",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 40},
+      "fieldConfig": {"defaults": {"unit": "short"}},
+      "options": {"orientation": "horizontal", "reduceOptions": {"calcs": ["lastNotNull"]}},
+      "targets": [
+        {"expr": "items_stock_level{shop=\"%[1]s\"}", "legendFormat": "{{item_name}}"}
+      ]
+    },
+    {
+      "type": "timeseries", "id": 14,
+      "title": "Payment processing duration (p95 / p50)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 40},
+      "fieldConfig": {"defaults": {"unit": "s"}},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum(rate(payment_processing_duration_seconds_bucket{shop=\"%[1]s\"}[5m])) by (le))", "legendFormat": "p95"},
+        {"expr": "histogram_quantile(0.50, sum(rate(payment_processing_duration_seconds_bucket{shop=\"%[1]s\"}[5m])) by (le))", "legendFormat": "p50"}
+      ]
+    }
+  ]
+}`, shop.Name, shop.Namespace, uid)
 }

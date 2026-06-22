@@ -41,7 +41,7 @@ type ShopReconciler struct {
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=postgresql.cnpg.io,resources=clusters,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=redis.redis.opstreelabs.in,resources=redis,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors;podmonitors,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors;podmonitors;prometheusrules;alertmanagerconfigs,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile implements the F5 (spec 10.1) Shop reconciliation logic.
 func (r *ShopReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -189,6 +189,11 @@ func (r *ShopReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	// 10. ServiceMonitor + PodMonitor.
 	if err := r.reconcileMonitors(ctx, &shop); err != nil {
 		return r.fail(ctx, &shop, "MonitorsFailed", err)
+	}
+
+	// 10.5. Per-shop PrometheusRule + AlertmanagerConfig.
+	if err := r.reconcileAlerts(ctx, &shop); err != nil {
+		return r.fail(ctx, &shop, "AlertsFailed", err)
 	}
 
 	// 11. Grafana dashboard ConfigMap.
