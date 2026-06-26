@@ -402,6 +402,7 @@ func (r *ShopReconciler) reconcileAlerts(ctx context.Context, shop *shopv1alpha1
 				"name": "discord",
 				"discordConfigs": []interface{}{
 					map[string]interface{}{
+						"sendResolved": true,
 						"apiURL": map[string]interface{}{
 							"name": secretName(shop),
 							"key":  "DISCORD_WEBHOOK_URL",
