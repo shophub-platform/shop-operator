@@ -147,6 +147,7 @@ func (s *ClusterAlertsSetup) ensureAlertmanagerConfig(ctx context.Context, ns st
 					"name": "cluster-discord",
 					"discordConfigs": []interface{}{
 						map[string]interface{}{
+							"sendResolved": true,
 							"apiURL": map[string]interface{}{
 								"name": "shophub-cluster-discord",
 								"key":  "webhookURL",
