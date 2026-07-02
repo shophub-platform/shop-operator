@@ -1,139 +1,74 @@
 # shop-operator
 
-Kubernetes operator for the ShopHub platform (Faza F5 — Shop, DiscordChannel i Wallet reconciler-i implementirani; testovi 10.4 u toku).
+This is the Kubernetes operator for the ShopHub platform, written in Go with kubebuilder and controller-runtime. It is the "executor" part of the platform: the ShopHub back end never creates Kubernetes resources directly. Instead it creates, updates, and deletes custom resources (`Shop`, `DiscordChannel`, `Wallet`), and this operator watches those resources through a reconcile loop and provisions everything a shop needs, including Deployments, Services, Ingress, a database, monitoring, Discord notifications, and a blockchain wallet.
 
-Module: `github.com/shophub-platform/shop-operator` · Domain: `shophub.io` · Group/Version: `shop.shophub.io/v1alpha1`
+Module: `github.com/shophub-platform/shop-operator`. Domain: `shophub.io`. Group and version: `shop.shophub.io/v1alpha1`.
 
-## CRDs
+## Role in the architecture
 
-| Kind | Short | Key spec fields |
-|------|-------|-----------------|
-| `Shop` | `shp` | `name`, `availability` (standard\|high), `walletRef`, `databaseType` (postgres\|redis), `image`, `replicas` (computed) |
-| `DiscordChannel` | `dchan` | `guildID`, `channelName`, `notificationType`; status: `webhookURL`, `phase` |
-| `Wallet` | `wlt` | `network` (sepolia\|mainnet), `address` (optional → generated); status: `address`, `encryptedPrivateKeyRef`, `phase` |
+The operator is the bridge between ShopHub's API layer and the actual state of the cluster. When a user creates a shop in ShopHub, the back end writes a `Shop` custom resource. This operator notices it and creates all the supporting resources: a database through the CNPG or Redis operator, Deployments for the shop's front end and back end, a Service, an Ingress, a ConfigMap and Secret with configuration, a ServiceMonitor and PodMonitor for Prometheus, and a Grafana dashboard. It then writes the provisioning status back into `Shop.status.phase`, which ShopHub reads and shows to the user. The `DiscordChannel` custom resource manages a notification channel, and the `Wallet` custom resource manages the blockchain account that a shop uses to receive payments.
 
-`availability` maps to replicas: `standard → 2`, `high → 3` (see `ReplicasForAvailability`).
+## Custom resource definitions
 
-## Faza F5 — status implementacije
+`Shop` (short name `shp`) has spec fields for name, availability (standard or high), a wallet reference, database type (postgres or redis), image, and a computed replica count. `DiscordChannel` (short name `dchan`) has spec fields for guild ID, channel name, and notification type, with status fields for the webhook URL and phase. `Wallet` (short name `wlt`) has spec fields for network (sepolia or mainnet) and an optional address (generated automatically if omitted), with status fields for address, an encrypted private key reference, and phase. Availability maps to replica count through `ReplicasForAvailability`: standard maps to 2 replicas, high maps to 3.
 
-| Stavka | Opis | Status |
-|--------|------|--------|
-| **10.1** | Shop reconciler logika (13 koraka) | ✅ Implementirano |
-| **10.2** | DiscordChannel reconciler (Discord REST API, webhook, finalizer) | ✅ Implementirano |
-| **10.3** | Wallet reconciler (validacija adrese / key-pair generisanje, AES-GCM, finalizer) | ✅ Implementirano |
-| **10.4** | Testovi operatora (unit + chaos + coverage) | ✅ Unit (fake-client) za sva 3 reconcilera + unit chaos; coverage ≥70%. Kind integracioni dokumentovan |
-| **10.5** | Definition of Done (E2E < 60s, cleanup, coverage ≥ 70%) | ⏳ Čeka 10.2–10.4 |
+## Implementation status
 
-### 10.1 Shop reconciler — šta je urađeno
+The Shop reconciler logic, covering all 13 steps described below, is implemented. The DiscordChannel reconciler, using the Discord REST API for channel and webhook creation plus a finalizer for cleanup, is implemented. The Wallet reconciler, covering address validation and key pair generation with AES-GCM encryption plus a finalizer, is implemented. Operator tests, including unit and chaos tests with coverage tracking, are in place: unit tests using a fake client exist for all three reconcilers, along with a unit level chaos test, and coverage sits at or above 70 percent; Kind based integration testing is documented separately. The Definition of Done, which requires an end to end run under 60 seconds, resource cleanup, and coverage of at least 70 percent, is still pending completion of the items above.
 
-`internal/controller/shop_controller.go` (+ `shop_resources.go`, `shop_external.go`)
-implementira svih 13 koraka iz specifikacije:
+### Shop reconciler
 
-1. Prima Shop CR; ako ne postoji → exit (children se brišu preko owner-reference GC).
-2. Validira Spec: referencirani **Wallet** mora postojati; **databaseType** mora biti `postgres` ili `redis`.
-3. Reconcile **DiscordChannel** (kreira CR; čita webhook URL kad je Ready).
-4. Reconcile **baze**: kreira CNPG `Cluster` (postgres) ili `Redis` CR (redis); blokira dok nije Ready.
-5. **ConfigMap** sa konfiguracijom aplikacije (`DB_HOST`, `DB_PORT`, `WALLET_ADDRESS`, …).
-6. **Secret** sa `DATABASE_URL` i `DISCORD_WEBHOOK_URL`.
-7. **Deployment** za Shop BE: `replicas = standard?2:3`, `envFrom` ConfigMap + Secret.
-8. **Deployment** za Shop FE.
-9. **Service**-ovi (ClusterIP) + **Ingress** (`<name>.shophub.local`, `/`→FE, `/api`→BE).
-10. **ServiceMonitor** + **PodMonitor** (Prometheus).
-11. **Grafana** dashboard ConfigMap (label `grafana_dashboard: "1"`).
-12. **OwnerReference** na sve kreirane resurse (cascading garbage collection).
-13. **Status**: `Phase`, `ObservedGeneration`, `Conditions`, `URL`, `ReplicaCount`, `ReadyReplicas`.
+`internal/controller/shop_controller.go`, together with `shop_resources.go` and `shop_external.go`, implements all 13 steps from the specification. It receives the Shop custom resource and exits if it no longer exists, since children are cleaned up through owner reference garbage collection. It validates the spec, requiring that the referenced Wallet exists and that databaseType is either postgres or redis. It reconciles the DiscordChannel, creating the custom resource and reading the webhook URL once it is ready. It reconciles the database, creating a CNPG Cluster for postgres or a Redis custom resource for redis, and blocks until it is ready. It creates a ConfigMap with application configuration such as DB_HOST, DB_PORT, and WALLET_ADDRESS. It creates a Secret containing DATABASE_URL and DISCORD_WEBHOOK_URL. It creates a Deployment for the shop back end, with replicas set to 2 for standard or 3 for high, sourcing environment variables from the ConfigMap and Secret. It creates a Deployment for the shop front end. It creates ClusterIP Services and an Ingress that routes the root path to the front end and `/api` to the back end, at `<name>.shophub.local`. It creates a ServiceMonitor and PodMonitor for Prometheus. It creates a Grafana dashboard ConfigMap labeled `grafana_dashboard: "1"`. It sets an owner reference on every resource it creates, enabling cascading garbage collection. Finally, it updates status fields including Phase, ObservedGeneration, Conditions, URL, ReplicaCount, and ReadyReplicas.
 
-Dvije projektne odluke u 10.1:
+Two design decisions were made here. `Spec.Image` refers to the back end image, while the front end image is supplied through the annotation `shop.shophub.io/frontend-image`, defaulting to a placeholder until a real front end image exists. Because the Discord and Wallet reconcilers were completed later, Discord integration is treated as best effort: a channel is created and its webhook used once ready, and Wallet only needs to exist. A strict gate that blocks provisioning until Discord is ready, as described in the specification, can be enabled with `REQUIRE_DISCORD=true`. External database and monitoring operators are treated strictly.
 
-- `Spec.Image` je **backend** image; frontend image se zadaje anotacijom
-  `shop.shophub.io/frontend-image` (default placeholder dok FE image ne postoji).
-- Pošto 10.2/10.3 još nisu gotovi, **Discord** je *best-effort* (kreira kanal, koristi
-  webhook kad bude Ready), a **Wallet** mora samo *postojati*. Strogi gate iz
-  specifikacije ("blokiraj dok Discord nije Ready") se uključuje sa
-  `REQUIRE_DISCORD=true`. Eksterni operatori za bazu/monitoring se tretiraju striktno.
+### DiscordChannel reconciler
 
-### 10.2 DiscordChannel reconciler — šta je urađeno
+`internal/controller/discordchannel_controller.go` and `internal/discord/client.go` implement a Discord REST API client under `internal/discord` that creates a text channel with `POST /guilds/{id}/channels`, creates a webhook with `POST /channels/{id}/webhooks`, and deletes a channel with `DELETE /channels/{id}`, against the base URL `https://discord.com/api/v10`, overridable through `DISCORD_API_BASE`. The bot token is read from a Secret named `discord-bot-token` in the operator's namespace, resolved through the `OPERATOR_NAMESPACE` or `POD_NAMESPACE` environment variable, then the service account namespace file, then falling back to `default`; supported keys are `token`, `bot-token`, and `DISCORD_BOT_TOKEN`. The reconciler creates the channel, then the webhook, and stores the webhook URL in a Secret named `discord-webhook-<name>`. A finalizer named `shop.shophub.io/discordchannel-cleanup` deletes the Discord channel and the webhook Secret when the custom resource is deleted. Status fields track Phase (Pending, Creating, Ready, or Failed), ChannelID, WebhookID, WebhookURL, and Conditions, and the reconciler is idempotent, skipping creation if the IDs are already present in status.
 
-`internal/controller/discordchannel_controller.go` + `internal/discord/client.go`:
+### Wallet reconciler
 
-- **Discord REST API** klijent (`internal/discord`): `POST /guilds/{id}/channels` (tekstualni
-  kanal), `POST /channels/{id}/webhooks` (webhook), `DELETE /channels/{id}` (cleanup).
-  Bazni URL je `https://discord.com/api/v10`, override preko `DISCORD_API_BASE`.
-- **Bot token** se čita iz Secreta `discord-bot-token` u namespace-u operatora
-  (`OPERATOR_NAMESPACE`/`POD_NAMESPACE` env, pa service-account namespace fajl, pa `default`).
-  Podržani ključevi: `token`, `bot-token`, `DISCORD_BOT_TOKEN`.
-- Kreira kanal → kreira webhook → **webhook URL čuva u Secretu `discord-webhook-<name>`**.
-- **Finalizer** `shop.shophub.io/discordchannel-cleanup`: pri brisanju CR-a briše Discord
-  kanal i webhook Secret.
-- Status: `Phase` (Pending→Creating→Ready/Failed), `ChannelID`, `WebhookID`, `WebhookURL`,
-  `Conditions`. Idempotentno (ne kreira ponovo ako su ID-evi već u statusu).
+`internal/controller/wallet_controller.go` and `internal/wallet/wallet.go` handle two cases. If `Spec.Address` is set, the reconciler validates its format using EIP-55 through `go-ethereum/common`, stores the normalized address in `Status.Address`, and sets `Phase=Ready`, without creating a Secret since the key is external. If `Spec.Address` is empty, the reconciler generates a new secp256k1 key pair using `go-ethereum/crypto`, encrypts the private key with AES-256-GCM, and stores it in a Secret named `<name>-wallet-key` under the key `encrypted-private-key`, with `Status.EncryptedPrivateKeyRef` pointing to it. The AES passphrase is read from the environment variable `WALLET_ENCRYPTION_KEY` or from a Secret named `wallet-encryption-key` (key `key` or `passphrase`) in the operator's namespace, and a 32 byte AES key is derived from it with SHA-256. A finalizer named `shop.shophub.io/wallet-cleanup` deletes the Secret when the Wallet custom resource is deleted, and the reconciler is idempotent, doing nothing once `Status.Phase=Ready`.
 
-### 10.3 Wallet reconciler — šta je urađeno
+## Running and testing
 
-`internal/controller/wallet_controller.go` + `internal/wallet/wallet.go`:
+On Windows and PowerShell, `make` is not available, so `go` and `kubectl` are used directly. On Linux and macOS, `make build`, `make test`, `make install`, and `make run` still work.
 
-- **Spec.Address postavljen** → validira format (EIP-55, `go-ethereum/common`), čuva
-  normalizovanu adresu u `Status.Address`, `Phase=Ready`. Bez Secreta (ključ je eksterni).
-- **Spec.Address prazan** → generiše novi secp256k1 **key pair** (`go-ethereum/crypto`),
-  privatni ključ enkriptuje **AES-256-GCM** i sprema u Secret `<name>-wallet-key`
-  (ključ `encrypted-private-key`); `Status.EncryptedPrivateKeyRef` pokazuje na njega.
-- **AES passphrase** se čita iz env `WALLET_ENCRYPTION_KEY` ili iz Secreta
-  `wallet-encryption-key` (ključ `key`/`passphrase`) u namespace-u operatora; iz njega se
-  SHA-256 izvodi 32-bajtni AES ključ.
-- **Finalizer** `shop.shophub.io/wallet-cleanup` briše Secret pri brisanju Wallet CR-a.
-- Idempotentno: kad je `Status.Phase=Ready` ne radi ništa.
-
-## Pokretanje i testiranje
-
-> Na **Windows / PowerShell** `make` ne postoji — koriste se `go` i `kubectl` direktno.
-> (Na Linux/macOS i dalje rade `make build`, `make test`, `make install`, `make run`.)
-
-### 1. Provjera kompilacije (ne treba klaster)
+To check that the project compiles without needing a cluster:
 
 ```powershell
 cd D:\FAKULTET\MASTER\DEVOPS\shop-operator
 go build ./...
 go vet ./...
-go test ./...        # postojeći unit testovi (api paket)
+go test ./...        # existing unit tests (api package)
 ```
 
-### 2. Preduslovi na klasteru (striktni mod 10.1)
+Running the strict mode reconciler against a real cluster requires several external operators to already be installed: CNPG (CloudNativePG) for postgres databases, the opstree Redis operator (`redis.redis.opstreelabs.in/v1beta2`) for redis databases, the kube-prometheus-stack CRDs for ServiceMonitor and PodMonitor, and an nginx ingress controller.
 
-Reconciler kreira resurse iz eksternih operatora, pa moraju biti instalirani:
-
-- **CNPG** (CloudNativePG) — za `postgres` baze
-- **Redis operator** (opstree `redis.redis.opstreelabs.in/v1beta2`) — za `redis` baze
-- **kube-prometheus-stack** — CRD-ovi `ServiceMonitor` / `PodMonitor`
-- **Ingress controller** (nginx)
-
-### 3. Lokalno pokretanje
+To run locally:
 
 ```powershell
 kind create cluster
 
-# instaliraj CRD-ove (zamjena za `make install`)
+# install the CRDs (replaces `make install`)
 kubectl apply -f config/crd/bases
 
-# pokreni operatora lokalno (zamjena za `make run`)
+# run the operator locally (replaces `make run`)
 go run ./cmd/main.go
 ```
 
-U drugom prozoru:
+In a second terminal, apply the Wallet sample first since Shop depends on it, then the Shop sample, and watch the phase transition from Pending to Provisioning to Ready:
 
 ```powershell
-# prvo Wallet (Shop zavisi od njega), pa Shop
 kubectl apply -f config/samples/shop_v1alpha1_wallet.yaml
 kubectl apply -f config/samples/shop_v1alpha1_shop.yaml
 
-kubectl get shops -w          # prati Phase: Pending -> Provisioning -> Ready
-kubectl describe shop <ime>   # Conditions, URL, ReplicaCount
+kubectl get shops -w
+kubectl describe shop <name>
 kubectl get deploy,svc,ingress,configmap,secret -l app.kubernetes.io/managed-by=shop-operator
 ```
 
-### 3b. Test DiscordChannel reconciler-a (10.2)
-
-Treba ti pravi Discord bot token (Developer Portal → Bot) i Guild ID servera u koji
-bot ima dozvolu da kreira kanale. Operatoru reci u kom je namespace-u token:
+Testing the DiscordChannel reconciler requires a real Discord bot token from the Developer Portal and the guild ID of a server where the bot can create channels. Tell the operator which namespace holds the token, then create the DiscordChannel custom resource with the guild ID filled in:
 
 ```powershell
 $env:OPERATOR_NAMESPACE="default"
@@ -141,63 +76,52 @@ kubectl create secret generic discord-bot-token --from-literal=token=<BOT_TOKEN>
 go run ./cmd/main.go
 ```
 
-U drugom prozoru kreiraj DiscordChannel CR (popuni `guildID` u sample-u):
-
 ```powershell
 kubectl apply -f config/samples/shop_v1alpha1_discordchannel.yaml
-kubectl get dchan -w                       # Phase Pending -> Creating -> Ready
-kubectl get secret discord-webhook-<ime>   # webhook URL je tu, ključ "url"
-kubectl delete dchan <ime>                  # finalizer briše kanal + webhook secret
+kubectl get dchan -w
+kubectl get secret discord-webhook-<name>
+kubectl delete dchan <name>
 ```
 
-> Bez pravog tokena/klastera možeš logiku testirati i envtest-om sa mock Discord serverom
-> (`DISCORD_API_BASE` → tvoj test HTTP server) — to je dio 10.4.
+Without a real token or cluster, the logic can also be tested with envtest against a mock Discord server by pointing `DISCORD_API_BASE` at a local test HTTP server.
 
-### 3c. Test Wallet reconciler-a (10.3)
-
-Operatoru daj AES passphrase (env je najlakše) i pokreni ga:
+Testing the Wallet reconciler requires an AES passphrase, most easily supplied through the environment:
 
 ```powershell
 $env:OPERATOR_NAMESPACE="default"
-$env:WALLET_ENCRYPTION_KEY="neka-tajna-fraza"
+$env:WALLET_ENCRYPTION_KEY="a secret passphrase"
 go run ./cmd/main.go
 ```
 
-**Generisanje ključa** (Spec.Address prazan):
+To generate a new key pair, leave `Spec.Address` empty and watch the phase move to Ready with the address populated:
 
 ```powershell
 kubectl apply -f config/samples/shop_v1alpha1_wallet.yaml
-kubectl get wlt -w                         # Phase -> Ready, Address popunjen
-kubectl get wlt <ime> -o jsonpath="{.status}"   # address + encryptedPrivateKeyRef
-kubectl get secret <ime>-wallet-key                # enkriptovani ključ
-kubectl delete wlt <ime>                    # finalizer briše Secret
+kubectl get wlt -w
+kubectl get wlt <name> -o jsonpath="{.status}"
+kubectl get secret <name>-wallet-key
+kubectl delete wlt <name>
 ```
 
-**Validacija postojeće adrese**: u sample-u postavi `spec.address: "0x..."` (validna 0x+40 hex) →
-operator je samo provjeri/normalizuje u `Status.Address`, bez Secreta. Nevalidna adresa → `Phase=Failed`.
+To validate an existing address instead, set `spec.address` in the sample to a valid 0x prefixed 40 character hex address; the operator only checks and normalizes it into `Status.Address` without creating a Secret. An invalid address results in `Phase=Failed`.
 
-### 3d. Testovi i coverage (10.4)
-
-Svi unit testovi reconcilera koriste **fake-client** (rade na Windows-u, bez klastera/envtest-a):
+All reconciler unit tests use a fake client and run without a real cluster or envtest:
 
 ```powershell
 go test ./... -cover
 ```
 
-Coverage nad `internal` paketima (DoD ≥70%):
+Coverage across the internal packages, against a target of at least 70 percent, can be checked with:
 
 ```powershell
 go test -coverpkg=./internal/... -coverprofile=cover.out ./...
 go tool cover -func=cover.out | Select-String "total:"
-go tool cover -html=cover.out          # HTML izvještaj u browseru
+go tool cover -html=cover.out
 ```
 
-Pokriveno: `internal/wallet` ~82%, `internal/discord` ~82%, `internal/controller` ~70% (sva tri
-reconcilera + builderi + unit „chaos" test koji briše Deployment i provjerava da ga operator
-ponovo napravi). Kind integracioni test (apply Shop → Ready → validacija svih resursa) i živi
-chaos test zahtijevaju pun stack operatora (CNPG/Redis/Prometheus) i rade se ručno na kind klasteru.
+Current coverage is roughly 82 percent for `internal/wallet`, 82 percent for `internal/discord`, and 70 percent for `internal/controller`, including all three reconcilers, builders, and a unit level chaos test that deletes a Deployment and checks that the operator recreates it. A Kind based integration test, applying a Shop resource and validating that it reaches Ready with all resources present, along with a live chaos test, require the full operator stack (CNPG, Redis, Prometheus) and are run manually against a Kind cluster.
 
-### 4. Docker image
+Building the Docker image:
 
 ```powershell
 docker build --build-arg VERSION=v0.1.0 -t docker.io/shophub/shop-operator:0.1.0 .
@@ -205,9 +129,8 @@ docker build --build-arg VERSION=v0.1.0 -t docker.io/shophub/shop-operator:0.1.0
 
 ## Note on generated code
 
-## Note on generated code
+`zz_generated.deepcopy.go` and the files under `config/crd/bases/*.yaml` are normally produced by `controller-gen` through `make generate` and `make manifests`. They are committed here so the project builds without first running the generator. Re-run the generator after editing any `*_types.go` file to keep them in sync.
 
-`zz_generated.deepcopy.go` and `config/crd/bases/*.yaml` are normally produced by
-`controller-gen` (`make generate` / `make manifests`). They are committed here so the
-project builds without first running the generator. Re-run the generator after editing
-any `*_types.go` to keep them in sync.
+## Technical stack
+
+The operator is written in Go using the kubebuilder v4 project layout and controller-runtime for the reconcile loop, manager, and client, with `zz_generated.deepcopy.go` and the CRD YAML generated through controller-gen. External integrations include the Discord REST API for creating channels and webhooks through a bot token, and go-ethereum (`common`, `crypto`) for validating and generating Ethereum addresses and keys, with AES-256-GCM encryption of the private key stored in a Kubernetes Secret. The operator relies on several external operators: CNPG (CloudNativePG) for PostgreSQL databases, the opstree Redis operator for Redis databases, the kube-prometheus-stack CRDs (ServiceMonitor and PodMonitor) for monitoring, and an nginx ingress controller. Testing includes unit tests with a fake client that run without a cluster, Kind and envtest based integration tests, and a coverage gate of at least 70 percent. For build and deployment, a Dockerfile builds the operator image and a Makefile follows the kubebuilder standard; installation into a cluster happens through the `shop-operator` Helm chart in the `helm-charts` repository, which also includes the CRDs.
